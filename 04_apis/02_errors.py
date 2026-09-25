@@ -4,6 +4,7 @@
 import httpx
 import json
 
+<<<<<<< HEAD
 USER = "schacon"
 URL = "https://api.github.com/users/{user}/events/public"
 

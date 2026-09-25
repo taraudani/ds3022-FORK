@@ -240,3 +240,7 @@ __marimo__/
 
 # Raw API responses landed by 04_ingest/07_pipeline.py
 04_ingest/data/
+03_transform/dbt/.dbt/
+03_transform/dbt/.user.yml
+03_transform/dbt/profiles.yml
+customers-2M.csv
