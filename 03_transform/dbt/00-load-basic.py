@@ -1,3 +1,5 @@
+#needs error handling, more elaborate commentding, and logs 
+
 import os
 from pathlib import Path
 import requests

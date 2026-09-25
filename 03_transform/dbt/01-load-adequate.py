@@ -1,3 +1,5 @@
+#tries each month and provides errors and  logging errors as well as print to screen
+
 import logging
 import os
 import sys
