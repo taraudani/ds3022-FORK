@@ -19,6 +19,7 @@ to cycle through a series of related links to build up all 1000 records.
 """
 
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +29,10 @@ from prefect import flow, task
 from prefect.logging import get_run_logger
 from prefect.task_runners import ThreadPoolTaskRunner
 
+# copy all prefect logs (including print() via log_prints) into a local file
+_fh = logging.FileHandler("github_pagination.log")
+_fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+logging.getLogger("prefect").addHandler(_fh)
 
 # commit history for the git/git repository
 TOKEN = os.environ["GH_PAT"]
@@ -42,9 +47,6 @@ PAGES = 10
 # of git/git commits and stores each one into a duckdb table.
 # add more tasks and more data if you like, and do more with it.
 # if successful you should have 1000 records in your db.
-
-# local duckdb file, created if missing
-conn = duckdb.connect("actions.duckdb")  
 
 @task(name="ingest", log_prints=True, retries=3, retry_delay_seconds=5)
 def ingest_data():
@@ -67,14 +69,62 @@ def ingest_data():
     # if you need to see a working example of this, see this file in this repo
     # 04_apis/05_pagination.py
 
-    # just a placeholder for now. remove the print below this is built out
-    print("something")
+    logger = get_run_logger()
+    try:
+        # follow the "next" Link header until it's gone or we hit PAGES
+        url = URL
+        params = {"per_page": PER_PAGE}   # only needed on the first request
+        page = 1
+        rows = []   # accumulates every commit across all pages
+
+        while url and page <= PAGES:
+            response = httpx.get(url, headers=HEADERS, params=params)
+            response.raise_for_status()   # 4xx/5xx -> exception, which triggers prefect retries
+            commits = response.json()     # list of up to 100 commit dicts
+            print(f"page {page}: {len(commits)} commits")
+
+            # flatten each nested commit into a tuple matching the table columns
+            for c in commits:
+                rows.append((
+                    c["sha"],
+                    c["commit"]["author"]["name"],
+                    c["commit"]["author"]["date"],
+                    c["commit"]["message"].splitlines()[0],      # first line only
+                    (c.get("author") or {}).get("login"),        # GitHub user, may be null
+                    c["html_url"],
+                ))
+
+            url = response.links.get("next", {}).get("url")   # None on the last page
+            params = None                                     # next URL already has per_page & page
+            page += 1
+
+        # local duckdb file, created if missing; closed automatically when the block exits
+        with duckdb.connect("actions.duckdb") as conn:
+            # one table holding every commit; replaced on each run so reruns don't duplicate
+            conn.execute("""
+                CREATE OR REPLACE TABLE commits (
+                    sha         VARCHAR PRIMARY KEY,
+                    author_name VARCHAR,
+                    author_date TIMESTAMPTZ,
+                    message     VARCHAR,
+                    gh_login    VARCHAR,
+                    html_url    VARCHAR
+                )
+            """)
+            conn.executemany("INSERT INTO commits VALUES (?, ?, ?, ?, ?, ?)", rows)
+
+            count = conn.execute("SELECT count(*) FROM commits").fetchone()[0]
+            print(f"stored {count} commits in actions.duckdb")
+    except Exception:
+        logger.exception("ingest failed")   # message + full traceback to UI and log file
+        raise                               # re-raise so prefect marks the task failed and retries
 
 
 # name the flow something you can identify as yourself
-@flow(name="nem2p-flow")
+@flow(name="hav7tz-flow")
 def main_flow():
     ingest_data()
 
-# it doesn't seem this flow executes when you run it. Why?
-# fix it ;^)
+# defining a flow doesn't run it -- call it when the file is executed directly
+if __name__ == "__main__":
+    main_flow()
